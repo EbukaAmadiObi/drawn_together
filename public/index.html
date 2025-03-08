@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skribbl Clone</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div id="welcome-screen">
+            <h1>Skribbl Clone</h1>
+            <div class="form-group">
+                <input type="text" id="username" placeholder="Enter your username" maxlength="15">
+                <button id="join-btn">Join Game</button>
+            </div>
+        </div>
+
+        <div id="game-screen" class="hidden">
+            <div class="game-header">
+                <div class="game-info">
+                    <div id="round-info">Round: <span id="current-round">0</span>/<span id="total-rounds">3</span></div>
+                    <div id="timer">Time: <span id="time-left">80</span>s</div>
+                    <div id="word-display">Word: <span id="current-word">_____</span></div>
+                </div>
+                <div id="turn-info">Waiting for players...</div>
+            </div>
+
+            <div class="main-game-area">
+                <div class="drawing-container">
+                    <canvas id="drawing-board"></canvas>
+                    <div id="drawing-tools" class="hidden">
+                        <div class="color-palette">
+                            <div class="color" data-color="#000000" style="background-color: #000000;"></div>
+                            <div class="color" data-color="#ff0000" style="background-color: #ff0000;"></div>
+                            <div class="color" data-color="#00ff00" style="background-color: #00ff00;"></div>
+                            <div class="color" data-color="#0000ff" style="background-color: #0000ff;"></div>
+                            <div class="color" data-color="#ffff00" style="background-color: #ffff00;"></div>
+                            <div class="color" data-color="#ff00ff" style="background-color: #ff00ff;"></div>
+                            <div class="color" data-color="#00ffff" style="background-color: #00ffff;"></div>
+                            <div class="color" data-color="#ffffff" style="background-color: #ffffff;"></div>
+                        </div>
+                        <div class="brush-sizes">
+                            <div class="brush-size" data-size="3"></div>
+                            <div class="brush-size" data-size="6"></div>
+                            <div class="brush-size" data-size="10"></div>
+                        </div>
+                        <button id="clear-btn">Clear</button>
+                    </div>
+                </div>
+
+                <div class="sidebar">
+                    <div class="players-container">
+                        <h3>Players</h3>
+                        <ul id="players-list"></ul>
+                    </div>
+                    <div class="chat-container">
+                        <div id="chat-messages"></div>
+                        <div class="chat-input-container">
+                            <input type="text" id="chat-input" placeholder="Type your guess here...">
+                            <button id="send-btn">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const socket = io();
+            
+            // DOM Elements
+            const welcomeScreen = document.getElementById('welcome-screen');
+            const gameScreen = document.getElementById('game-screen');
+            const usernameInput = document.getElementById('username');
+            const joinBtn = document.getElementById('join-btn');
+            const playersList = document.getElementById('players-list');
+            const turnInfo = document.getElementById('turn-info');
+            const currentRound = document.getElementById('current-round');
+            const totalRounds = document.getElementById('total-rounds');
+            const timeLeft = document.getElementById('time-left');
+            const currentWord = document.getElementById('current-word');
+            const chatMessages = document.getElementById('chat-messages');
+            const chatInput = document.getElementById('chat-input');
+            const sendBtn = document.getElementById('send-btn');
+            const canvas = document.getElementById('drawing-board');
+            const clearBtn = document.getElementById('clear-btn');
+            const drawingTools = document.getElementById('drawing-tools');
+            const colorPalette = document.querySelectorAll('.color');
+            const brushSizes = document.querySelectorAll('.brush-size');
+
+            let ctx;
+            let isDrawing = false;
+            let currentColor = '#000000';
+            let currentSize = 3;
+            let canDraw = false;
+
+            // Initialize canvas
+            function initCanvas() {
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+                ctx = canvas.getContext('2d');
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = currentColor;
+                ctx.lineWidth = currentSize;
+            }
+
+            // Integrated Drawing Functions
+            function startDrawing(e) {
+                if (!canDraw) return;
+                
+                isDrawing = true;
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Start a new path
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                
+                // Draw a point at the starting position
+                ctx.fillStyle = currentColor;
+                ctx.fillRect(x - (currentSize / 2), y - (currentSize / 2), currentSize, currentSize);
+                
+                // Send this point to server
+                socket.emit('draw', { x, y, color: currentColor, size: currentSize, type: 'point' });
+            }
+
+            function stopDrawing() {
+                if (!isDrawing) return;
+                
+                isDrawing = false;
+                ctx.beginPath();
+                
+                // Send the current canvas data to server
+                socket.emit('draw-end', canvas.toDataURL());
+            }
+
+            function draw(e) {
+                if (!isDrawing || !canDraw) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Draw a line to the new position
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                
+                // Also draw a rectangle at the current position for consistent thickness
+                ctx.fillStyle = currentColor;
+                ctx.fillRect(x - (currentSize / 2), y - (currentSize / 2), currentSize, currentSize);
+                
+                // Send drawing data to server
+                socket.emit('draw', { x, y, color: currentColor, size: currentSize, type: 'line' });
+            }
+
+            // Event handlers for drawing
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+
+            // Color and brush size selection
+            colorPalette.forEach(color => {
+                color.addEventListener('click', () => {
+                    if (!canDraw) return;
+                    currentColor = color.dataset.color;
+                    ctx.strokeStyle = currentColor;
+                });
+            });
+
+            brushSizes.forEach(size => {
+                size.addEventListener('click', () => {
+                    if (!canDraw) return;
+                    currentSize = size.dataset.size;
+                    ctx.lineWidth = currentSize;
+                });
+            });
+
+            // Clear canvas
+            clearBtn.addEventListener('click', () => {
+                if (!canDraw) return;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                socket.emit('clear-canvas');
+            });
+
+            // Join game
+            joinBtn.addEventListener('click', () => {
+                const username = usernameInput.value.trim();
+                if (username) {
+                    socket.emit('join-game', username);
+                }
+            });
+
+            // Chat & guessing
+            sendBtn.addEventListener('click', sendMessage);
+            chatInput.addEventListener('keypress', e => {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+
+            function sendMessage() {
+                const message = chatInput.value.trim();
+                if (message) {
+                    socket.emit('chat-message', message);
+                    chatInput.value = '';
+                }
+            }
+
+            function addMessage(message, isCorrectGuess = false) {
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('message');
+                if (isCorrectGuess) {
+                    messageElement.classList.add('correct-guess');
+                }
+                messageElement.textContent = message;
+                chatMessages.appendChild(messageElement);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+
+            // Socket events
+            socket.on('game-joined', data => {
+                welcomeScreen.classList.add('hidden');
+                gameScreen.classList.remove('hidden');
+                initCanvas();
+                
+                // Initialize rounds display
+                totalRounds.textContent = data.totalRounds;
+            });
+
+            socket.on('players-update', players => {
+                playersList.innerHTML = '';
+                players.forEach(player => {
+                    const li = document.createElement('li');
+                    li.textContent = `${player.username}: ${player.score}`;
+                    if (player.isDrawing) {
+                        li.classList.add('drawing');
+                    }
+                    playersList.appendChild(li);
+                });
+            });
+
+            socket.on('turn-start', data => {
+                canDraw = data.isDrawing;
+                turnInfo.textContent = data.isDrawing 
+                    ? `Your turn to draw: ${data.word}` 
+                    : `${data.drawerName} is drawing`;
+                
+                currentRound.textContent = data.round;
+                
+                // Show/hide drawing tools
+                if (data.isDrawing) {
+                    drawingTools.classList.remove('hidden');
+                    currentWord.textContent = data.word;
+                } else {
+                    drawingTools.classList.add('hidden');
+                    currentWord.textContent = '_'.repeat(data.wordLength);
+                }
+                
+                // Clear canvas for new round
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            });
+
+            socket.on('timer-update', time => {
+                timeLeft.textContent = time;
+            });
+
+            socket.on('chat-message', message => {
+                addMessage(message);
+            });
+
+            socket.on('correct-guess', message => {
+                addMessage(message, true);
+            });
+
+            socket.on('word-reveal', word => {
+                currentWord.textContent = word;
+                addMessage(`The word was: ${word}`, true);
+            });
+
+            socket.on('draw', data => {
+                if (canDraw) return; // Don't redraw your own drawings
+                
+                if (data.type === 'point') {
+                    // Draw a point (rectangle)
+                    ctx.fillStyle = data.color;
+                    ctx.fillRect(data.x - (data.size / 2), data.y - (data.size / 2), data.size, data.size);
+                } else if (data.type === 'line') {
+                    // Draw a line segment
+                    ctx.strokeStyle = data.color;
+                    ctx.lineWidth = data.size;
+                    
+                    ctx.lineTo(data.x, data.y);
+                    ctx.stroke();
+                    
+                    // Also draw a rectangle at this point for consistency
+                    ctx.fillStyle = data.color;
+                    ctx.fillRect(data.x - (data.size / 2), data.y - (data.size / 2), data.size, data.size);
+                }
+            });
+
+            socket.on('draw-end', () => {
+                if (canDraw) return;
+                ctx.beginPath();
+            });
+
+            socket.on('clear-canvas', () => {
+                if (canDraw) return;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            });
+
+            socket.on('canvas-state', dataUrl => {
+                if (canDraw) return;
+                
+                const img = new Image();
+                img.onload = () => {
+                    ctx.drawImage(img, 0, 0);
+                };
+                img.src = dataUrl;
+            });
+
+            socket.on('game-over', results => {
+                turnInfo.textContent = 'Game Over!';
+                drawingTools.classList.add('hidden');
+                
+                let resultsMessage = 'Final Scores:\n';
+                results.forEach((player, index) => {
+                    resultsMessage += `${index + 1}. ${player.username}: ${player.score}\n`;
+                });
+                
+                addMessage(resultsMessage);
+            });
+
+            // Handle window resize
+            window.addEventListener('resize', () => {
+                // Save the current drawing
+                const savedCanvas = canvas.toDataURL();
+                
+                // Resize canvas
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+                
+                // Restore context properties
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.strokeStyle = currentColor;
+                ctx.lineWidth = currentSize;
+                
+                // Restore the drawing
+                const img = new Image();
+                img.onload = () => {
+                    ctx.drawImage(img, 0, 0);
+                };
+                img.src = savedCanvas;
+            });
+
+            // Receive the assigned color
+            socket.on('assignColor', (assignedColor) => {
+                currentColor = assignedColor;
+                ctx.strokeStyle = currentColor;
+            });
+
+            // Load previous drawings when connecting
+            socket.on('loadCanvas', (dataUrl) => {
+                if (dataUrl) {
+                    const img = new Image();
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0);
+                    };
+                    img.src = dataUrl;
+                }
+            });
+        });
+    </script>
+</body>
+</html>
