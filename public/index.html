@@ -108,26 +108,12 @@
                 ctx.lineWidth = currentSize;
             }
 
-            // Integrated Drawing Functions
+            // Drawing functions
             function startDrawing(e) {
                 if (!canDraw) return;
                 
                 isDrawing = true;
-                
-                const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                
-                // Start a new path
-                ctx.beginPath();
-                ctx.moveTo(x, y);
-                
-                // Draw a point at the starting position
-                ctx.fillStyle = currentColor;
-                ctx.fillRect(x - (currentSize / 2), y - (currentSize / 2), currentSize, currentSize);
-                
-                // Send this point to server
-                socket.emit('draw', { x, y, color: currentColor, size: currentSize, type: 'point' });
+                draw(e);
             }
 
             function stopDrawing() {
@@ -147,16 +133,13 @@
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
                 
-                // Draw a line to the new position
                 ctx.lineTo(x, y);
                 ctx.stroke();
-                
-                // Also draw a rectangle at the current position for consistent thickness
-                ctx.fillStyle = currentColor;
-                ctx.fillRect(x - (currentSize / 2), y - (currentSize / 2), currentSize, currentSize);
+                ctx.beginPath();
+                ctx.moveTo(x, y);
                 
                 // Send drawing data to server
-                socket.emit('draw', { x, y, color: currentColor, size: currentSize, type: 'line' });
+                socket.emit('draw', { x, y, color: currentColor, size: currentSize });
             }
 
             // Event handlers for drawing
@@ -287,22 +270,13 @@
             socket.on('draw', data => {
                 if (canDraw) return; // Don't redraw your own drawings
                 
-                if (data.type === 'point') {
-                    // Draw a point (rectangle)
-                    ctx.fillStyle = data.color;
-                    ctx.fillRect(data.x - (data.size / 2), data.y - (data.size / 2), data.size, data.size);
-                } else if (data.type === 'line') {
-                    // Draw a line segment
-                    ctx.strokeStyle = data.color;
-                    ctx.lineWidth = data.size;
-                    
-                    ctx.lineTo(data.x, data.y);
-                    ctx.stroke();
-                    
-                    // Also draw a rectangle at this point for consistency
-                    ctx.fillStyle = data.color;
-                    ctx.fillRect(data.x - (data.size / 2), data.y - (data.size / 2), data.size, data.size);
-                }
+                ctx.strokeStyle = data.color;
+                ctx.lineWidth = data.size;
+                
+                ctx.lineTo(data.x, data.y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(data.x, data.y);
             });
 
             socket.on('draw-end', () => {
@@ -358,23 +332,6 @@
                     ctx.drawImage(img, 0, 0);
                 };
                 img.src = savedCanvas;
-            });
-
-            // Receive the assigned color
-            socket.on('assignColor', (assignedColor) => {
-                currentColor = assignedColor;
-                ctx.strokeStyle = currentColor;
-            });
-
-            // Load previous drawings when connecting
-            socket.on('loadCanvas', (dataUrl) => {
-                if (dataUrl) {
-                    const img = new Image();
-                    img.onload = () => {
-                        ctx.drawImage(img, 0, 0);
-                    };
-                    img.src = dataUrl;
-                }
             });
         });
     </script>

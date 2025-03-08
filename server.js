@@ -22,12 +22,6 @@ const WORDS = [
     'beach', 'castle', 'dinosaur', 'earth', 'fire', 'giraffe'
 ];
 
-// Available colors for players
-const PLAYER_COLORS = [
-    '#FF5733', '#33FF57', '#3357FF', '#FF33A8', 
-    '#33A8FF', '#A833FF', '#FFA833', '#33FFA8'
-];
-
 // Game state
 let players = [];
 let currentRound = 0;
@@ -36,7 +30,6 @@ let timeLeft = 0;
 let currentWord = '';
 let currentDrawer = null;
 let canvasState = null;
-let drawingHistory = [];
 
 // Helper functions
 function resetGame() {
@@ -51,7 +44,6 @@ function resetGame() {
     currentWord = '';
     currentDrawer = null;
     canvasState = null;
-    drawingHistory = [];
 }
 
 function selectRandomWord() {
@@ -70,18 +62,6 @@ function getNextDrawer() {
     return players[nextIndex];
 }
 
-function assignPlayerColor() {
-    // Find an unused color
-    const usedColors = players.map(p => p.color);
-    for (const color of PLAYER_COLORS) {
-        if (!usedColors.includes(color)) {
-            return color;
-        }
-    }
-    // If all colors are used, pick a random one
-    return PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)];
-}
-
 function startRound() {
     if (players.length < 2) return;
     
@@ -90,10 +70,6 @@ function startRound() {
         player.isDrawing = false;
         player.hasGuessedCorrect = false;
     });
-    
-    // Clear drawing history for new round
-    drawingHistory = [];
-    canvasState = null;
     
     // Select the next drawer
     currentDrawer = getNextDrawer();
@@ -141,41 +117,82 @@ function startRound() {
 }
 
 function updateTimer() {
-    // Clear any existing timer
-    if (timer) {
-        clearTimeout(timer);
-    }
-    
-    // Update all clients with the current time
     io.emit('timer-update', timeLeft);
     
-    // Decrement time and continue if there's time left
-    if (timeLeft > 0) {
-        timeLeft--;
-        timer = setTimeout(updateTimer, 1000);
-    } else {
-        // Time's up! End the round
-        endRound();
+    if (timeLeft <= 0) {
+        // Reveal the word to everyone when time is up
+        io.emit('word-reveal', currentWord);
+        
+        // Wait 3 seconds before starting the next round
+        setTimeout(startRound, 3000);
+        return;
     }
+    
+    // Check if all players have guessed correctly
+    const nonDrawingPlayers = players.filter(player => !player.isDrawing);
+    const allGuessedCorrect = nonDrawingPlayers.length > 0 && 
+                              nonDrawingPlayers.every(player => player.hasGuessedCorrect);
+    
+    if (allGuessedCorrect) {
+        // Everyone guessed correctly, end the round early
+        io.emit('chat-message', 'Everyone guessed correctly! Starting next round...');
+        
+        // Reveal the word
+        io.emit('word-reveal', currentWord);
+        
+        // Wait 3 seconds before starting the next round
+        setTimeout(startRound, 3000);
+        return;
+    }
+    
+    timeLeft--;
+    timer = setTimeout(updateTimer, 1000);
 }
 
-function endRound() {
-    // Clear the timer
-    if (timer) {
-        clearTimeout(timer);
+function endGame() {
+    clearTimeout(timer);
+    
+    // Sort players by score
+    const results = [...players].sort((a, b) => b.score - a.score);
+    
+    // Notify players
+    io.emit('game-over', results.map(player => ({
+        username: player.username,
+        score: player.score
+    })));
+    
+    // Reset the game after 10 seconds
+    setTimeout(() => {
+        resetGame();
+        if (players.length >= 2) {
+            startRound();
+        }
+    }, 10000);
+}
+
+function checkGuess(player, message) {
+    if (!currentWord || player.isDrawing || player.hasGuessedCorrect) {
+        return false;
     }
     
-    // Notify all players that the round is over
-    io.emit('round-end', {
-        word: currentWord,
-        scores: players.map(player => ({
-            username: player.username,
-            score: player.score
-        }))
-    });
+    const guess = message.toLowerCase().trim();
+    const word = currentWord.toLowerCase();
     
-    // Start the next round after a short delay
-    setTimeout(startRound, 3000);
+    if (guess === word) {
+        // Calculate score based on time left
+        const scoreGain = Math.ceil(timeLeft / 2) + 10;
+        player.score += scoreGain;
+        player.hasGuessedCorrect = true;
+        
+        // Give points to the drawer
+        if (currentDrawer) {
+            currentDrawer.score += 5;
+        }
+        
+        return true;
+    }
+    
+    return false;
 }
 
 // Socket.IO events
@@ -186,24 +203,17 @@ io.on('connection', (socket) => {
     socket.on('join-game', (username) => {
         console.log(`Player ${username} joined the game`);
         
-        // Assign a color to the player
-        const playerColor = assignPlayerColor();
-        
         // Create player object
         const player = {
             id: socket.id,
             username: username,
             score: 0,
             isDrawing: false,
-            hasGuessedCorrect: false,
-            color: playerColor
+            hasGuessedCorrect: false
         };
         
         // Add player to the game
         players.push(player);
-        
-        // Notify the player of their assigned color
-        socket.emit('assignColor', playerColor);
         
         // Notify the player
         socket.emit('game-joined', {
@@ -212,7 +222,7 @@ io.on('connection', (socket) => {
         
         // Send the current canvas state if available
         if (canvasState) {
-            socket.emit('loadCanvas', canvasState);
+            socket.emit('canvas-state', canvasState);
         }
         
         // Update player list for everyone
@@ -245,10 +255,6 @@ io.on('connection', (socket) => {
         const player = players.find(p => p.id === socket.id);
         if (!player || !player.isDrawing) return;
         
-        // Store the drawing point in history
-        drawingHistory.push(data);
-        
-        // Broadcast to other players
         socket.broadcast.emit('draw', data);
     });
     
@@ -264,16 +270,87 @@ io.on('connection', (socket) => {
         const player = players.find(p => p.id === socket.id);
         if (!player || !player.isDrawing) return;
         
-        drawingHistory = [];
         canvasState = null;
         socket.broadcast.emit('clear-canvas');
     });
     
-    // ... rest of the existing socket event handlers ...
+    // Chat messages
+    socket.on('chat-message', (message) => {
+        const player = players.find(p => p.id === socket.id);
+        if (!player) return;
+        
+        // Check if the message is a correct guess
+        if (checkGuess(player, message)) {
+            // Notify everyone of the correct guess
+            io.emit('correct-guess', `${player.username} guessed the word!`);
+            
+            // Update player list
+            io.emit('players-update', players.map(player => ({
+                username: player.username,
+                score: player.score,
+                isDrawing: player.isDrawing
+            })));
+        } else {
+            // Send regular chat message
+            // Don't broadcast the actual message if it contains the word
+            const containsWord = currentWord && 
+                                message.toLowerCase().includes(currentWord.toLowerCase());
+            
+            if (player.isDrawing && containsWord) {
+                socket.emit('chat-message', `You can't give away the word!`);
+            } else {
+                io.emit('chat-message', `${player.username}: ${message}`);
+            }
+        }
+    });
+    
+    // Disconnect
+    socket.on('disconnect', () => {
+        console.log('Player disconnected:', socket.id);
+        
+        const playerIndex = players.findIndex(p => p.id === socket.id);
+        if (playerIndex === -1) return;
+        
+        const player = players[playerIndex];
+        
+        // Remove the player
+        players.splice(playerIndex, 1);
+        
+        // Broadcast message
+        io.emit('chat-message', `${player.username} has left the game`);
+        
+        // Update player list
+        io.emit('players-update', players.map(player => ({
+            username: player.username,
+            score: player.score,
+            isDrawing: player.isDrawing
+        })));
+        
+        // Check if the disconnected player was the drawer
+        if (player.isDrawing) {
+            // End the current round and start a new one
+            clearTimeout(timer);
+            io.emit('chat-message', `${player.username} (the drawer) has left. Starting new round...`);
+            io.emit('word-reveal', currentWord);
+            
+            // Wait 3 seconds before starting the next round
+            setTimeout(() => {
+                if (players.length >= 2) {
+                    startRound();
+                } else {
+                    resetGame();
+                }
+            }, 3000);
+        } else if (players.length < 2) {
+            // Not enough players to continue
+            resetGame();
+            io.emit('chat-message', 'Not enough players to continue. Waiting for more players...');
+        }
+    });
 });
 
 // Start the server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-}); 
+});
